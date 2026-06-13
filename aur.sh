@@ -1,148 +1,186 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-AUR_DIR="${AUR_DIR:-../plasmasafe-aur}"
-PKGNAME="${PKGNAME:-plasmasafe}"
+# PlasmaSafe AUR submitter.
+# This script creates/updates an AUR package repository containing only:
+#   - PKGBUILD
+#   - .SRCINFO
+# It does NOT copy your project source code into the AUR repository.
 
-# Set AUR package version here.
-PKGVER="${PKGVER:-0.1.0.0}"
-PKGREL="${PKGREL:-1}"
+# -----------------------------
+# Edit these values per release
+# -----------------------------
+PKGNAME="plasmasafe"
+PKGVER="0.1.0.0"
+PKGREL="1"
+SHA256SUM="0dd8593c4c62bd753d53e02486c7ed006cd6acfe4ad08d912eae06941b399721"
 
-PROJECT_DIR="$(pwd)"
+# Local AUR checkout path. Override at runtime if you want:
+#   AUR_DIR=/path/to/plasmasafe-aur ./aur.sh
+AUR_DIR="${AUR_DIR:-$HOME/aur/${PKGNAME}}"
 
-echo "== PlasmaSafe AUR publish script =="
-echo "Project dir: $PROJECT_DIR"
-echo "AUR dir:     $AUR_DIR"
-echo "Package:     $PKGNAME"
-echo "Version:     $PKGVER-$PKGREL"
-echo
+# Default is to push to AUR. To test without pushing:
+#   ./aur.sh --no-push
+PUSH_TO_AUR=1
 
-fail() {
-  echo
-  echo "FAILED: $1"
-  exit 1
-}
+case "${1:-}" in
+    "") ;;
+    --push) PUSH_TO_AUR=1 ;;
+    --no-push) PUSH_TO_AUR=0 ;;
+    -h|--help)
+        cat <<HELP
+Usage: ./aur.sh [--push|--no-push]
+
+Edit PKGVER and SHA256SUM near the top first.
+Run checksum-helper.sh to get SHA256SUM.
+
+Environment:
+  AUR_DIR=/custom/path ./aur.sh --no-push
+HELP
+        exit 0
+        ;;
+    *)
+        echo "error: unknown argument: $1" >&2
+        echo "usage: ./aur.sh [--push|--no-push]" >&2
+        exit 1
+        ;;
+esac
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "error: required command not found: $1" >&2
+        exit 1
+    }
 }
 
 need_cmd git
 need_cmd makepkg
-need_cmd updpkgsums
-need_cmd sed
+need_cmd awk
 
-if ! command -v namcap >/dev/null 2>&1; then
-  echo "WARN: namcap not found. Install with: sudo pacman -S namcap"
+if [[ "$SHA256SUM" == "PUT_SHA256_HERE" || -z "$SHA256SUM" ]]; then
+    echo "error: edit aur.sh and replace SHA256SUM with the value from checksum-helper.sh" >&2
+    exit 1
 fi
 
-echo "== Checking project files =="
-test -f "$PROJECT_DIR/plasmasafe.cabal" || fail "plasmasafe.cabal not found"
-test -f "$PROJECT_DIR/README.md" || fail "README.md not found"
-test -f "$PROJECT_DIR/CHANGELOG.md" || fail "CHANGELOG.md not found"
-test -f "$PROJECT_DIR/test-plasmasafe.sh" || fail "test-plasmasafe.sh not found"
+if [[ ! "$SHA256SUM" =~ ^[a-fA-F0-9]{64}$ ]]; then
+    echo "error: SHA256SUM must be a 64-character hex string" >&2
+    exit 1
+fi
 
-echo "== Running project tests =="
-cabal build
-./test-plasmasafe.sh
+AUR_REMOTE="ssh://aur@aur.archlinux.org/${PKGNAME}.git"
+SRC_URL="https://github.com/yousefvand/${PKGNAME}/archive/refs/tags/v${PKGVER}.tar.gz"
 
-echo
-echo "== Checking AUR repository =="
-if [ ! -d "$AUR_DIR/.git" ]; then
-  fail "AUR repo not found at $AUR_DIR
+mkdir -p "$(dirname "$AUR_DIR")"
 
-Create it first with:
-
-  git clone ssh://aur@aur.archlinux.org/${PKGNAME}.git $AUR_DIR"
+if [[ ! -d "$AUR_DIR/.git" ]]; then
+    echo "==> Creating local AUR checkout: $AUR_DIR"
+    if git clone "$AUR_REMOTE" "$AUR_DIR" 2>/dev/null; then
+        :
+    else
+        echo "==> git clone failed. Creating a new local repo instead."
+        echo "    This is normal for a brand-new AUR package, as long as your AUR SSH key is configured."
+        mkdir -p "$AUR_DIR"
+        git -C "$AUR_DIR" init
+        git -C "$AUR_DIR" checkout -B master
+        git -C "$AUR_DIR" remote add origin "$AUR_REMOTE"
+    fi
 fi
 
 cd "$AUR_DIR"
 
-REMOTE_URL="$(git remote get-url origin || true)"
-echo "AUR remote: $REMOTE_URL"
+git checkout -B master >/dev/null
 
-case "$REMOTE_URL" in
-  *aur.archlinux.org*) ;;
-  *)
-    fail "This does not look like an AUR remote: $REMOTE_URL"
-    ;;
-esac
+# Keep the AUR repository clean: only PKGBUILD and .SRCINFO are generated.
+find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 
-echo
-echo "== Syncing AUR repository =="
-git pull --rebase
+cat > PKGBUILD <<PKGBUILD_EOF
+# Maintainer: Remisa Phillips <remisa.yousefvand@gmail.com>
 
-echo
-echo "== Checking required AUR files =="
-test -f PKGBUILD || fail "PKGBUILD missing in AUR repo"
+pkgname=${PKGNAME}
+pkgver=${PKGVER}
+pkgrel=${PKGREL}
+pkgdesc='KDE Plasma configuration backup and restore command-line tool'
+arch=('x86_64')
+url='https://github.com/yousefvand/plasmasafe'
+license=('MIT')
+depends=('ghc-libs' 'haskell-aeson' 'haskell-aeson-pretty' 'haskell-optparse-applicative')
+makedepends=('ghc')
+source=("\${pkgname}-\${pkgver}.tar.gz::${SRC_URL}")
+sha256sums=('${SHA256SUM}')
 
-echo
-echo "== Updating PKGBUILD version =="
-sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" PKGBUILD
-sed -i "s/^pkgrel=.*/pkgrel=${PKGREL}/" PKGBUILD
+_find_srcdir() {
+    local d
 
-grep -q "^pkgver=${PKGVER}$" PKGBUILD || fail "pkgver was not updated correctly"
-grep -q "^pkgrel=${PKGREL}$" PKGBUILD || fail "pkgrel was not updated correctly"
+    d="\${srcdir}/\${pkgname}-\${pkgver}"
+    if [[ -d "\$d" ]]; then
+        printf '%s\n' "\$d"
+        return 0
+    fi
 
-echo "PKGBUILD version set to: ${PKGVER}-${PKGREL}"
+    d="\${srcdir}/\${pkgname}-v\${pkgver}"
+    if [[ -d "\$d" ]]; then
+        printf '%s\n' "\$d"
+        return 0
+    fi
 
-echo
-echo "== Updating checksums =="
-updpkgsums
+    find "\${srcdir}" -mindepth 1 -maxdepth 1 -type d -name "\${pkgname}-*" | head -n 1
+}
 
-echo
-echo "== Generating .SRCINFO =="
+prepare() {
+    cd "\$(_find_srcdir)"
+
+    # The project uses Cabal Simple build-type, but the release tree may not
+    # include Setup.hs. Generate it locally inside the makepkg build directory.
+    cat > Setup.hs <<'SETUP_EOF'
+import Distribution.Simple
+main = defaultMain
+SETUP_EOF
+}
+
+build() {
+    cd "\$(_find_srcdir)"
+
+    runhaskell Setup.hs configure \
+        --prefix=/usr \
+        --docdir="/usr/share/doc/\${pkgname}" \
+        --enable-executable-dynamic \
+        --enable-shared \
+        --enable-optimization=2
+
+    runhaskell Setup.hs build
+}
+
+package() {
+    cd "\$(_find_srcdir)"
+
+    runhaskell Setup.hs copy --destdir="\${pkgdir}"
+
+    install -Dm644 LICENSE "\${pkgdir}/usr/share/licenses/\${pkgname}/LICENSE"
+    install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md"
+}
+PKGBUILD_EOF
+
 makepkg --printsrcinfo > .SRCINFO
 
-echo
-echo "== Building package =="
-makepkg --clean --syncdeps --noconfirm
-
-if command -v namcap >/dev/null 2>&1; then
-  echo
-  echo "== Running namcap =="
-  namcap PKGBUILD || true
-
-  PACKAGE_FILE="$(find . -maxdepth 1 -type f -name "${PKGNAME}-*.pkg.tar.*" | head -n 1 || true)"
-  if [ -n "$PACKAGE_FILE" ]; then
-    namcap "$PACKAGE_FILE" || true
-  fi
-fi
-
-echo
-echo "== Git status =="
-git status --short
-
-if git diff --quiet && git diff --cached --quiet; then
-  echo "No AUR changes to push."
-  exit 0
-fi
-
-echo
-echo "Files changed:"
-git status --short
-
-echo
-read -r -p "Commit and push these AUR changes? [y/N] " answer
-
-case "$answer" in
-  y|Y|yes|YES)
-    ;;
-  *)
-    echo "Aborted before commit."
-    exit 0
-    ;;
-esac
+echo "==> Generated AUR files in: $AUR_DIR"
+echo "==> Files:"
+ls -la PKGBUILD .SRCINFO
 
 git add PKGBUILD .SRCINFO
 
 if git diff --cached --quiet; then
-  echo "Nothing staged."
-  exit 0
+    echo "==> No changes to commit."
+else
+    git commit -m "Add/update ${PKGNAME} ${PKGVER}-${PKGREL}"
 fi
 
-git commit -m "Update ${PKGNAME} to ${PKGVER}-${PKGREL}"
-git push
-
-echo
-echo "AUR push completed."
+if [[ "$PUSH_TO_AUR" -eq 1 ]]; then
+    echo "==> Pushing to AUR: $AUR_REMOTE"
+    git push -u origin master
+    echo "==> Done. AUR package submitted/updated: ${PKGNAME}"
+else
+    echo "==> --no-push selected. Nothing was pushed."
+    echo "To submit later:"
+    echo "  cd '$AUR_DIR'"
+    echo "  git push -u origin master"
+fi
