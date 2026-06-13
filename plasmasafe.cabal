@@ -1,0 +1,48 @@
+cabal-version:      3.0
+
+name:               plasmasafe
+version:            0.1.0.0
+synopsis:           KDE Plasma configuration backup and restore tool
+description:        PlasmaSafe is a small command-line tool for saving, listing, diffing, and restoring KDE Plasma configuration snapshots.
+license:            MIT
+license-file:       LICENSE
+author:             Remisa Phillips
+maintainer:         remisa.yousefvand@gmail.com
+category:           System
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+executable plasmasafe
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
+    other-modules:
+        PlasmaSafe.Archive
+        PlasmaSafe.CLI
+        PlasmaSafe.Copy
+        PlasmaSafe.Doctor
+        PlasmaSafe.Manifest
+        PlasmaSafe.Paths
+        PlasmaSafe.Profile
+        PlasmaSafe.Restore
+        PlasmaSafe.Snapshot
+        PlasmaSafe.SnapshotStore
+        PlasmaSafe.Types
+        PlasmaSafe.Verify
+
+    build-depends:
+        base,
+        directory,
+        filepath,
+        time,
+        process,
+        bytestring,
+        text,
+        aeson,
+        aeson-pretty,
+        optparse-applicative
